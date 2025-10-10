@@ -3,25 +3,14 @@
 # This Python script uses Selenium WebDriver to open a specific Amazon product page and automatically extract the product’s title and price.It also handles the “Continue shopping” pop-up if it appears, and safely continues if the pop-up or price is not found, thanks to try/except blocks.
 
 
-# These lines import the required Python libraries.
-
-# selenium → for web automation.
-
-# webdriver_manager → automatically installs ChromeDriver.
-
-# TimeoutException and NoSuchElementException → used for error handling when elements are not found.
+# These lines import the required Python libraries.selenium → for web automatioN.webdriver_manager → automatically installs ChromeDriver.TimeoutException and NoSuchElementException → used for error handling when elements are not found.
 ![Alt text](https://github.com/madinateymurova/lab1writingscript/blob/main/Screenshot%202025-10-10%20154257.png?raw=true)
 
-# ChromeDriverManager().install() automatically downloads the correct ChromeDriver version.
-
-# Service() is a modern Selenium way to start ChromeDriver.
-
-# webdriver.Chrome(service=service) opens a Chrome browser controlled by Selenium.
+# ChromeDriverManager().install() automatically downloads the correct ChromeDriver version.Service() is a modern Selenium way to start ChromeDriver.webdriver.Chrome(service=service) opens a Chrome browser controlled by Selenium.
 
 ![](https://github.com/madinateymurova/lab1writingscript/blob/main/Screenshot%202025-10-10%20154528.png?raw=true)
 
-# Maximizes the browser window so that all elements on Amazon’s page are fully visible and clickable.
-# Opens the Amazon homepage in the browser.driver.get(url) navigates to any given URL.
+# Maximizes the browser window so that all elements on Amazon’s page are fully visible and clickable. Opens the Amazon homepage in the browser.driver.get(url) navigates to any given URL.
 
 ![](https://github.com/madinateymurova/lab1writingscript/blob/main/Screenshot%202025-10-10%20154832.png?raw=true)
 
