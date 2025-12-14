@@ -1,3 +1,7 @@
+import re
+import csv
+from datetime import datetime
+
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
@@ -6,55 +10,149 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from webdriver_manager.chrome import ChromeDriverManager
 
-# Open Chrome browser using Service
-service = Service(ChromeDriverManager().install())
-driver = webdriver.Chrome(service=service)
 
-driver.maximize_window()  # Maximize browser window to ensure all elements are visible
+def parse_price(text: str):
+    if not text:
+        return None
+    cleaned = text.replace(",", "")
+    m = re.search(r"(\d+(?:\.\d{1,2})?)", cleaned)
+    return float(m.group(1)) if m else None
 
-# Open Amazon homepage
-driver.get("https://www.amazon.com")
 
-# If a pop-up appears, click the "Continue shopping" button
-try:
-    continue_button = WebDriverWait(driver, 5).until(
-        EC.element_to_be_clickable((By.XPATH, "//*[text()='Continue shopping']"))
-    )
-    continue_button.click()
-    print("✅ 'Continue shopping' button clicked.")
-except TimeoutException:
-    print("⚠️ 'Continue shopping' button not found, continuing...")
+def is_captcha_or_blocked(driver) -> bool:
+    page = driver.page_source.lower()
+    keywords = [
+        "captcha",
+        "enter the characters you see below",
+        "sorry, we just need to make sure you're not a robot",
+        "robot check",
+    ]
+    return any(k in page for k in keywords)
 
-# Product URL to track
-product_url = 'https://www.amazon.com/LEGO-Creator-Forest-Animals-Transforms/dp/B0CGY3VF3K/?_encoding=UTF8&pd_rd_w=YRzFt&content-id=amzn1.sym.9929d3ab-edb7-4ef5-a232-26d90f828fa5&pf_rd_p=9929d3ab-edb7-4ef5-a232-26d90f828fa5&pf_rd_r=WZPJXWJT3BJTNDRNH8KJ&pd_rd_wg=aQ37x&pd_rd_r=4268b589-9572-458e-a005-24993e383b00&ref_=pd_hp_d_btf_crs_zg_bs_165793011'
-driver.get(product_url)
 
-# Extract product title and price
-try:
-    # Wait for the product title to appear
-    title = WebDriverWait(driver, 10).until(
+def safe_click_if_exists(driver, by, selector, timeout=3):
+    try:
+        el = WebDriverWait(driver, timeout).until(
+            EC.element_to_be_clickable((by, selector))
+        )
+        driver.execute_script("arguments[0].click();", el)
+        return True
+    except Exception:
+        return False
+
+
+def get_title(driver) -> str:
+    el = WebDriverWait(driver, 15).until(
         EC.presence_of_element_located((By.ID, "productTitle"))
-    ).text.strip()
+    )
+    return el.text.strip()
 
-    # Check multiple IDs for price
-    price = None
-    possible_price_ids = ["priceblock_ourprice", "priceblock_dealprice", "price_inside_buybox"]
-    for pid in possible_price_ids:
+
+def get_price(driver) -> str:
+    wait = WebDriverWait(driver, 15)
+
+    selectors = [
+        (By.CSS_SELECTOR, "span.a-price span.a-offscreen"),
+        (By.CSS_SELECTOR, "#corePriceDisplay_desktop_feature_div span.a-offscreen"),
+        (By.CSS_SELECTOR, "#corePrice_feature_div span.a-offscreen"),
+        (By.CSS_SELECTOR, "#apex_desktop span.a-price span.a-offscreen"),
+        (By.CSS_SELECTOR, "#price_inside_buybox"),
+        (By.ID, "priceblock_ourprice"),
+        (By.ID, "priceblock_dealprice"),
+    ]
+
+    for by, sel in selectors:
         try:
-            price = driver.find_element(By.ID, pid).text.strip()
-            if price:
-                break
-        except NoSuchElementException:
-            continue
-    if not price:
-        price = "Price not found"
+            el = wait.until(EC.presence_of_element_located((by, sel)))
+            txt = el.text.strip()
+            if txt:
+                return txt
+        except TimeoutException:
+            pass
 
-    # Print results
-    print(f"\nProduct: {title}")
-    print(f"Price: {price}")
+    try:
+        whole = driver.find_element(By.CSS_SELECTOR, "span.a-price-whole").text.strip().replace(",", "")
+        frac = driver.find_element(By.CSS_SELECTOR, "span.a-price-fraction").text.strip()
+        if whole:
+            return f"${whole}.{frac if frac else '00'}"
+    except NoSuchElementException:
+        pass
 
-except TimeoutException:
-    print("⚠️ Product information not found.")
+    try:
+        link = driver.find_element(By.PARTIAL_LINK_TEXT, "See all buying options")
+        driver.execute_script("arguments[0].click();", link)
+        el = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "span.a-price span.a-offscreen")))
+        txt = el.text.strip()
+        if txt:
+            return txt
+    except Exception:
+        pass
 
-# Close the browser
-driver.quit()
+    raise TimeoutException("Price element not found with known selectors.")
+
+
+def save_debug(driver):
+    try:
+        with open("debug_page.html", "w", encoding="utf-8") as f:
+            f.write(driver.page_source)
+    except Exception:
+        pass
+    try:
+        driver.save_screenshot("debug_screenshot.png")
+    except Exception:
+        pass
+
+
+def main():
+    product_url = "https://www.amazon.com/dp/B0CGY3VF3K"
+
+    service = Service(ChromeDriverManager().install())
+    options = webdriver.ChromeOptions()
+    options.add_argument("--start-maximized")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+
+    driver = webdriver.Chrome(service=service, options=options)
+
+    try:
+        driver.get("https://www.amazon.com")
+
+        safe_click_if_exists(driver, By.XPATH, "//*[text()='Continue shopping']", timeout=5)
+
+        driver.get(product_url)
+
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.TAG_NAME, "body"))
+        )
+
+        if is_captcha_or_blocked(driver):
+            save_debug(driver)
+            raise RuntimeError(
+                "CAPTCHA / robot check detected. Debug saved: debug_page.html and debug_screenshot.png"
+            )
+
+        title = get_title(driver)
+        price_text = get_price(driver)
+        price_value = parse_price(price_text)
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        with open("amazon_price_history.csv", "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([now, title, price_text, price_value, product_url])
+
+        print("Product:", title)
+        print("Price:", price_text)
+        print("Saved to amazon_price_history.csv")
+
+    except Exception as e:
+        save_debug(driver)
+        print("ERROR:", e)
+        print("Debug saved: debug_page.html and debug_screenshot.png")
+
+    finally:
+        driver.quit()
+
+
+if __name__ == "__main__":
+    main()
+
