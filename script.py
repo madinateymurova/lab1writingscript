@@ -1,5 +1,6 @@
 import re
 import csv
+import os
 from datetime import datetime
 
 from selenium import webdriver
@@ -11,12 +12,26 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from webdriver_manager.chrome import ChromeDriverManager
 
 
+
 def parse_price(text: str):
     if not text:
         return None
     cleaned = text.replace(",", "")
     m = re.search(r"(\d+(?:\.\d{1,2})?)", cleaned)
     return float(m.group(1)) if m else None
+
+
+def ensure_csv_header(path):
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "timestamp",
+                "title",
+                "price_text",
+                "price_value",
+                "url"
+            ])
 
 
 def is_captcha_or_blocked(driver) -> bool:
@@ -41,6 +56,7 @@ def safe_click_if_exists(driver, by, selector, timeout=3):
         return False
 
 
+
 def get_title(driver) -> str:
     el = WebDriverWait(driver, 15).until(
         EC.presence_of_element_located((By.ID, "productTitle"))
@@ -51,44 +67,52 @@ def get_title(driver) -> str:
 def get_price(driver) -> str:
     wait = WebDriverWait(driver, 15)
 
-    selectors = [
-        (By.CSS_SELECTOR, "span.a-price span.a-offscreen"),
-        (By.CSS_SELECTOR, "#corePriceDisplay_desktop_feature_div span.a-offscreen"),
-        (By.CSS_SELECTOR, "#corePrice_feature_div span.a-offscreen"),
-        (By.CSS_SELECTOR, "#apex_desktop span.a-price span.a-offscreen"),
-        (By.CSS_SELECTOR, "#price_inside_buybox"),
-        (By.ID, "priceblock_ourprice"),
+    priority_selectors = [
+        (By.CSS_SELECTOR, "span.a-price-to-pay span.a-offscreen"),
+        (By.CSS_SELECTOR, "#corePriceDisplay_desktop_feature_div span.a-price-to-pay span.a-offscreen"),
+        (By.CSS_SELECTOR, "#corePriceDisplay_desktop_feature_div span.a-price span.a-offscreen"),
         (By.ID, "priceblock_dealprice"),
+        (By.ID, "priceblock_ourprice"),
+        (By.CSS_SELECTOR, "#price_inside_buybox"),
     ]
 
-    for by, sel in selectors:
+    def looks_like_usd(t: str) -> bool:
+        return t.startswith("$") and re.search(r"\d", t)
+
+    for by, sel in priority_selectors:
         try:
             el = wait.until(EC.presence_of_element_located((by, sel)))
             txt = el.text.strip()
-            if txt:
+            if looks_like_usd(txt):
                 return txt
         except TimeoutException:
             pass
 
+    candidates = []
+    try:
+        els = driver.find_elements(By.CSS_SELECTOR, "span.a-price span.a-offscreen")
+        for el in els:
+            txt = el.text.strip()
+            if looks_like_usd(txt):
+                val = parse_price(txt)
+                if val and val > 0:
+                    candidates.append((txt, val))
+    except Exception:
+        pass
+
+    if candidates:
+        candidates.sort(key=lambda x: x[1])  # ən ucuz = real current price
+        return candidates[0][0]
+
     try:
         whole = driver.find_element(By.CSS_SELECTOR, "span.a-price-whole").text.strip().replace(",", "")
         frac = driver.find_element(By.CSS_SELECTOR, "span.a-price-fraction").text.strip()
-        if whole:
+        if whole.isdigit():
             return f"${whole}.{frac if frac else '00'}"
     except NoSuchElementException:
         pass
 
-    try:
-        link = driver.find_element(By.PARTIAL_LINK_TEXT, "See all buying options")
-        driver.execute_script("arguments[0].click();", link)
-        el = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "span.a-price span.a-offscreen")))
-        txt = el.text.strip()
-        if txt:
-            return txt
-    except Exception:
-        pass
-
-    raise TimeoutException("Price element not found with known selectors.")
+    raise TimeoutException("Price not found")
 
 
 def save_debug(driver):
@@ -101,6 +125,7 @@ def save_debug(driver):
         driver.save_screenshot("debug_screenshot.png")
     except Exception:
         pass
+
 
 
 def main():
@@ -126,9 +151,7 @@ def main():
 
         if is_captcha_or_blocked(driver):
             save_debug(driver)
-            raise RuntimeError(
-                "CAPTCHA / robot check detected. Debug saved: debug_page.html and debug_screenshot.png"
-            )
+            raise RuntimeError("CAPTCHA detected")
 
         title = get_title(driver)
         price_text = get_price(driver)
@@ -136,18 +159,20 @@ def main():
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        ensure_csv_header("amazon_price_history.csv")
+
         with open("amazon_price_history.csv", "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow([now, title, price_text, price_value, product_url])
 
         print("Product:", title)
-        print("Price:", price_text)
-        print("Saved to amazon_price_history.csv")
+        print("Raw price text:", price_text)
+        print("Parsed price value:", price_value)
 
     except Exception as e:
         save_debug(driver)
         print("ERROR:", e)
-        print("Debug saved: debug_page.html and debug_screenshot.png")
+        print("Debug saved")
 
     finally:
         driver.quit()
@@ -155,4 +180,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
